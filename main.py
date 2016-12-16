@@ -18,6 +18,9 @@ from google.appengine.ext import db
 import datetime
 import jinja2
 import rot13
+import string
+import hashlib
+import uuid
 
 jinja_environment = jinja2.Environment(autoescape=True,
 loader=jinja2.FileSystemLoader(os.path.join(os.path.dirname(__file__), 'templates')))
@@ -59,12 +62,24 @@ def valid_username(username):
 def valid_email(email):
     return EMAIL_RE.match(email)
 
+class Users(db.Model):
+    username = db.StringProperty(required = True)
+    password_hash = db.StringProperty(required = True)
+    salt = db.StringProperty(required = True)
+    email = db.EmailProperty(required = False)
+
+def hashed_key(key, salt = None):
+    if not salt:
+        salt = uuid.uuid4().hex
+    hashed_key = hashlib.sha512(key + salt).hexdigest()
+    return "%s|%s" %(hashed_key, salt)
+
 class AuthenticatorPage(webapp2.RequestHandler):
     def get(self):
         self.response.headers['Content-Type'] = 'text/html'
         template_values = {}
 
-        template = jinja_environment.get_template('authenticator.html')
+        template = jinja_environment.get_template('signup.html')
         self.response.out.write(template.render(template_values))
     def post(self):
         # Username validation
@@ -94,18 +109,43 @@ class AuthenticatorPage(webapp2.RequestHandler):
                 template_values['email_error'] = email_error
 
         if template_values:
-            template = jinja_environment.get_template('authenticator.html')
+            template = jinja_environment.get_template('signup.html')
             self.response.out.write(template.render(template_values))
         else:
-            self.redirect("/authenticator/success?name="+username)
+            pass_hash_str = hashed_key(password)
+            pass_hash, salt = pass_hash_str.split("|")
+            print pass_hash, salt
+            if email:
+                user = Users(username = username, password_hash = pass_hash, salt = salt, email = email)
+                user_key = user.put()
+                user_id = str(user_key.id())
+            else:
+                user = Users(username = username, password_hash = pass_hash, salt = salt)
+                user_key = user.put()
+                user_id = str(user_key.id())
+            hashed_user_id = hashed_key(user_id, "xadahiya").split("|")[0]
+            user_cookie_str = "%s|%s" %(user_id, hashed_user_id)
+            self.response.headers.add_header('Set-Cookie', 'userid = %s; Path=/' % user_cookie_str)
+
+            self.redirect("/user/welcome")
 
 class AuthenticationSuccessPage(webapp2.RequestHandler):
     def get(self):
         self.response.headers['Content-Type'] = 'text/html'
-        name = self.request.get("name")
-        template_values = {"name":name}
-        template = jinja_environment.get_template('authenticationSuccess.html')
-        self.response.out.write(template.render(template_values))
+        user_cookie = self.request.cookies.get('userid')
+        # print user_cookie
+        user_id, user_id_hash = user_cookie.split("|")
+        if hashed_key(user_id, "xadahiya").split("|")[0] == user_id_hash:
+            user = Users.get_by_id(int(user_id))
+            name = user.username
+            # print user
+
+            template_values = {"name":name}
+            template = jinja_environment.get_template('authenticationSuccess.html')
+            self.response.out.write(template.render(template_values))
+        else:
+            self.redirect("/signup")
+        # name = self.request.get("name")
 
 ##Blog post database
 class BlogPosts(db.Model):
@@ -164,8 +204,8 @@ class BlogNewPostPage(webapp2.RequestHandler):
             self.redirect('/blog/'+str(post_id))
 
 app = webapp2.WSGIApplication([
-    ('/rot13', Rot13Page), ('/authenticator', AuthenticatorPage),
-    ('/authenticator/success', AuthenticationSuccessPage),
+    ('/rot13', Rot13Page), ('/signup', AuthenticatorPage),
+    ('/user/welcome', AuthenticationSuccessPage),
     ('/blog', BlogPage), ('/blog/newpost', BlogNewPostPage),
     (r'/blog/(\d+)', PostPage),
 ], debug=True)
