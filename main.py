@@ -74,6 +74,18 @@ def hashed_key(key, salt = None):
     hashed_key = hashlib.sha512(key + salt).hexdigest()
     return "%s|%s" %(hashed_key, salt)
 
+def gen_user_cookie(user_id):
+    hashed_user_id = hashed_key(user_id, "xadahiya").split("|")[0]
+    return "%s|%s" %(user_id, hashed_user_id)
+
+def validate_user_cookie(user_cookie):
+    ''' validates a user cookie string and returns a user'''
+    user_id, user_id_hash = user_cookie.split("|")
+    if hashed_key(user_id, "xadahiya").split("|")[0] == user_id_hash:
+        return Users.get_by_id(int(user_id))
+    else:
+        return None
+
 class AuthenticatorPage(webapp2.RequestHandler):
     def get(self):
         self.response.headers['Content-Type'] = 'text/html'
@@ -123,23 +135,60 @@ class AuthenticatorPage(webapp2.RequestHandler):
                 user = Users(username = username, password_hash = pass_hash, salt = salt)
                 user_key = user.put()
                 user_id = str(user_key.id())
-            hashed_user_id = hashed_key(user_id, "xadahiya").split("|")[0]
-            user_cookie_str = "%s|%s" %(user_id, hashed_user_id)
+
+            user_cookie_str = gen_user_cookie(user_id)
             self.response.headers.add_header('Set-Cookie', 'userid = %s; Path=/' % user_cookie_str)
 
             self.redirect("/user/welcome")
+
+class LoginPage(webapp2.RequestHandler):
+    def get(self):
+        self.response.headers['Content-Type'] = 'text/html'
+
+        # user_cookie = self.request.cookies.get('userid')
+        # user = validate_user_cookie(user_cookie)
+        # if not user:
+        template_values = {}
+        template = jinja_environment.get_template('login.html')
+        self.response.out.write(template.render(template_values))
+        # else:
+            # self.redirect('/user/welcome')
+
+    def post(self):
+        template_values = {}
+        username = self.request.get("username")
+        password = self.request.get("password")
+        if not username:
+            template_values['error'] = "Please enter a username"
+        usernames = db.GqlQuery(' select *  from Users where username = :1 ', username)
+        try:
+            user = usernames[0]
+            if not hashed_key(password, user.salt).split("|")[0] == user.password_hash:
+                template_values['error'] = "Invalid Password"
+                template_values['username'] = username
+            # print user.password_hash, user.salt
+        except:
+            template_values['error'] = "Username does not exits"
+
+        if template_values:
+            template = jinja_environment.get_template('login.html')
+            self.response.out.write(template.render(template_values))
+        else:
+            user_id = str(user.key().id())
+            print user_id
+            user_cookie_str = gen_user_cookie(user_id)
+            self.response.headers.add_header('Set-Cookie', 'userid = %s; Path=/' % user_cookie_str)
+
+            self.redirect('user/welcome')
+
 
 class AuthenticationSuccessPage(webapp2.RequestHandler):
     def get(self):
         self.response.headers['Content-Type'] = 'text/html'
         user_cookie = self.request.cookies.get('userid')
-        # print user_cookie
-        user_id, user_id_hash = user_cookie.split("|")
-        if hashed_key(user_id, "xadahiya").split("|")[0] == user_id_hash:
-            user = Users.get_by_id(int(user_id))
+        user = validate_user_cookie(user_cookie)
+        if user:
             name = user.username
-            # print user
-
             template_values = {"name":name}
             template = jinja_environment.get_template('authenticationSuccess.html')
             self.response.out.write(template.render(template_values))
@@ -207,5 +256,5 @@ app = webapp2.WSGIApplication([
     ('/rot13', Rot13Page), ('/signup', AuthenticatorPage),
     ('/user/welcome', AuthenticationSuccessPage),
     ('/blog', BlogPage), ('/blog/newpost', BlogNewPostPage),
-    (r'/blog/(\d+)', PostPage),
+    (r'/blog/(\d+)', PostPage),('/login', LoginPage)
 ], debug=True)
